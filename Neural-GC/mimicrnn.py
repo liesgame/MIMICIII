@@ -6,7 +6,8 @@ from models.crnn_mimic import cRNN_mimic, train_model_ista, arrange_input, train
 device = torch.device('cuda')
 log = 'mimic_rnn.log'
 model_name = 'crnnmimic.pt'
-BARCH_SIZE = 10
+# BARCH_SIZE = 10
+# sf = 29
 H = 100
 data_path = '/home/comp/f2428631/mimic/data/all_hourly_data.h5'
 import numpy as np
