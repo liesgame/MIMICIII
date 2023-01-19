@@ -27,3 +27,4 @@ It can train crnn_mimic model with data from crnn_simple.py
 
 
 
+## castle
