@@ -13,8 +13,8 @@ ID_COLS = ['subject_id', 'hadm_id', 'icustay_id']
 RANDOM = 0
 MAX_LEN = 240
 SLICE_SIZE = 6
-GAP_TIME = 6
-PREDICTION_WINDOW = 4
+GAP_TIME = 0
+PREDICTION_WINDOW = 1
 OUTCOME_TYPE = 'binary'
 NUM_CLASSES = 2
 CHUNK_KEY = {'ONSET': 0, 'CONTROL': 1, 'ON_INTERVENTION': 2, 'WEAN': 3}
@@ -50,7 +50,8 @@ X = pd.read_hdf(data_path,'vitals_labs')
 Y = pd.read_hdf(data_path,'interventions')
 static = pd.read_hdf(data_path,'patients')
 idx = pd.IndexSlice
-Y.loc[idx[Y.index.levels[0][:patient_num]]]
+Y = Y.loc[idx[Y.index.levels[0][:patient_num]]]
+X = X.loc[idx[X.index.levels[0][:patient_num]]]
 print(X.shape)
 print(Y.shape)
 print(static.shape)
@@ -58,7 +59,8 @@ train_ids, test_ids = train_test_split(static.reset_index(), test_size=0.2, rand
 split_train_ids, val_ids = train_test_split(train_ids, test_size=0.125, random_state=RANDOM, stratify=train_ids['mort_hosp'])
 # Imputation and Standardization of Time Series Features¶
 X_clean = simple_imputer(X,train_ids['subject_id'])
-X_clean = X_clean.loc[idx[X_clean.index.levels[0][:patient_num]]]
+print(X_clean.shape)
+print(Y.shape)
 def minmax(x):# normalize
     mins = x.min()
     maxes = x.max()
@@ -174,6 +176,75 @@ print("Validation size: ", X_val.shape[0])
 print("Test size: ", X_test.shape[0])
 #Make Windows
 
+# def make_3d_tensor_slices(X_tensor, Y_tensor, lengths):
+
+#     num_patients = X_tensor.shape[0]
+#     timesteps = X_tensor.shape[1]
+#     num_features = X_tensor.shape[2]
+#     num_Y_features = Y_tensor.shape[2]
+#     # SLICE_SIZE 片大小 6
+#     X_tensor_new = np.zeros((lengths.sum(), SLICE_SIZE, num_features + num_Y_features))
+#     Y_tensor_new = np.zeros((lengths.sum(), num_Y_features))
+#     number_of_1 = 0
+#     current_row = 0
+#     # print(num_patients)
+#     for patient_index in range(num_patients):
+#         x_patient = X_tensor[patient_index]
+#         y_patient = Y_tensor[patient_index]
+#         length = lengths[patient_index]
+#         for timestep in range(length - PREDICTION_WINDOW - GAP_TIME - SLICE_SIZE):
+#             x_window = x_patient[timestep:timestep+SLICE_SIZE]
+#             y_window = y_patient[timestep:timestep+SLICE_SIZE]
+#             x_window = np.concatenate((x_window, y_window), axis=1)
+#             result = []
+#             for i in range(num_Y_features):
+#                 # 隔了 PREDICTION_WINDOW
+#                 result_window = y_patient[timestep+SLICE_SIZE+GAP_TIME:timestep+SLICE_SIZE+GAP_TIME+PREDICTION_WINDOW,i]
+#                 result_window_diff = set(np.diff(result_window))
+#                 # 如果有1 意味着 有 从 0 -》 变到 1 
+#                 #if 1 in result_window_diff: pdb.set_trace()
+#                 gap_window = y_patient[timestep+SLICE_SIZE:timestep+SLICE_SIZE+GAP_TIME,i]
+#                 gap_window_diff = set(np.diff(gap_window))
+#                 if OUTCOME_TYPE == 'binary':
+#                     if max(gap_window) == 1:
+#                         result.append(-1)
+#                     elif max(result_window) == 1:
+#                         result.append(1)
+#                     elif max(result_window) == 0:
+#                         result.append(0)
+
+
+#                 else: 
+#                     if 1 in gap_window_diff or -1 in gap_window_diff:
+#                         result.append(-1)
+#                     elif (len(result_window_diff) == 1) and (0 in result_window_diff) and (max(result_window) == 0):
+#                         result.append(CHUNK_KEY['CONTROL'])
+#                     elif (len(result_window_diff) == 1) and (0 in result_window_diff) and (max(result_window) == 1):
+#                         result.append(CHUNK_KEY['ON_INTERVENTION'])
+#                     elif 1 in result_window_diff: 
+#                         result.append(CHUNK_KEY['ONSET'])
+#                     elif -1 in result_window_diff:
+#                         result.append(CHUNK_KEY['WEAN'])
+#                     else:
+#                         result.append(-1)
+
+#             set_Y = set(result)
+#             if len(set_Y) != 1 or -1 not in set(set_Y):
+#                 X_tensor_new[current_row] = x_window
+#                 for i in range(num_Y_features):
+#                     if result[i] == 1:
+#                         number_of_1 += 1
+#                     result_i = result[i]
+#                     if result_i == -1:
+#                         result_i = 0
+#                     Y_tensor_new[current_row,i] = result_i
+#                 current_row += 1
+
+
+#     X_tensor_new = X_tensor_new[:current_row,:,:]
+#     Y_tensor_new = Y_tensor_new[:current_row,:]
+
+#     return X_tensor_new, Y_tensor_new
 def make_3d_tensor_slices(X_tensor, Y_tensor, lengths):
 
     num_patients = X_tensor.shape[0]
@@ -197,48 +268,9 @@ def make_3d_tensor_slices(X_tensor, Y_tensor, lengths):
             result = []
             for i in range(num_Y_features):
                 # 隔了 PREDICTION_WINDOW
-                result_window = y_patient[timestep+SLICE_SIZE+GAP_TIME:timestep+SLICE_SIZE+GAP_TIME+PREDICTION_WINDOW,i]
-                result_window_diff = set(np.diff(result_window))
-                # 如果有1 意味着 有 从 0 -》 变到 1 
-                #if 1 in result_window_diff: pdb.set_trace()
-                gap_window = y_patient[timestep+SLICE_SIZE:timestep+SLICE_SIZE+GAP_TIME,i]
-                gap_window_diff = set(np.diff(gap_window))
-                if OUTCOME_TYPE == 'binary':
-                    if max(gap_window) == 1:
-                        result.append(-1)
-                    elif max(result_window) == 1:
-                        result.append(1)
-                    elif max(result_window) == 0:
-                        result.append(0)
-
-
-                else: 
-                    if 1 in gap_window_diff or -1 in gap_window_diff:
-                        result.append(-1)
-                    elif (len(result_window_diff) == 1) and (0 in result_window_diff) and (max(result_window) == 0):
-                        result.append(CHUNK_KEY['CONTROL'])
-                    elif (len(result_window_diff) == 1) and (0 in result_window_diff) and (max(result_window) == 1):
-                        result.append(CHUNK_KEY['ON_INTERVENTION'])
-                    elif 1 in result_window_diff: 
-                        result.append(CHUNK_KEY['ONSET'])
-                    elif -1 in result_window_diff:
-                        result.append(CHUNK_KEY['WEAN'])
-                    else:
-                        result.append(-1)
-
-            set_Y = set(result)
-            if len(set_Y) != 1 or -1 not in set(set_Y):
-                X_tensor_new[current_row] = x_window
-                for i in range(num_Y_features):
-                    if result[i] == 1:
-                        number_of_1 += 1
-                    result_i = result[i]
-                    if result_i == -1:
-                        result_i = 0
-                    Y_tensor_new[current_row,i] = result_i
-                current_row += 1
-
-
+                result_i = y_patient[timestep+SLICE_SIZE+GAP_TIME:timestep+SLICE_SIZE+GAP_TIME+PREDICTION_WINDOW,i]
+                Y_tensor_new[current_row,i] = result_i
+            current_row += 1
     X_tensor_new = X_tensor_new[:current_row,:,:]
     Y_tensor_new = Y_tensor_new[:current_row,:]
 
