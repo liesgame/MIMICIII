@@ -51,8 +51,8 @@ class_weights = []
 for i in range(output_num):
     print(y_train[:,i])
     print(np.sum(y_train[:,i]))
-    print(class_weight.compute_class_weight(class_weight='balanced', classes = np.unique(y_train[:,i]), y = y_train[:,i]))
-    weight_tmp = torch.from_numpy(class_weight.compute_class_weight(class_weight='balanced', classes = np.unique(y_train[i]), y = y_train[i])).float().cuda(device=device)
+    weight_tmp = torch.from_numpy(class_weight.compute_class_weight(class_weight='balanced', classes = np.unique(y_train[:,i]), y = y_train[:,i])).float().cuda(device=device)
+    print(weight_tmp)
     weight_tmp[1] = weight_tmp[1] * 100
     class_weights.append(weight_tmp)
 crnn = cRNN_mimic(x_train.shape[-1], output=y_train.shape[-1],hidden=H, T=x_train.shape[1], class_weights = class_weights).cuda(device=device)
