@@ -51,6 +51,9 @@ Y = pd.read_hdf(data_path,'interventions')
 static = pd.read_hdf(data_path,'patients')
 idx = pd.IndexSlice
 Y = Y.loc[idx[Y.index.levels[0][:patient_num]]]
+
+# 删除全部为0的列
+Y = Y.loc[:, (Y != 0).any(axis = 0)]
 X = X.loc[idx[X.index.levels[0][:patient_num]]]
 print(X.shape)
 print(Y.shape)
