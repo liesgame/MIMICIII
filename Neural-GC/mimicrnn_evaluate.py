@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from synthetic import simulate_lorenz_96
-from models.crnn_mimic import cRNN_mimic, train_model_ista, arrange_input, train_model_gista, train_model_adam
+from models.crnn_mimic import cRNN_mimic, arrange_input, train_model_gista, train_model_adam
 # For GPU acceleration
 device = torch.device('cuda')
 log = 'mimic_rnn.log'
@@ -41,17 +41,18 @@ print('shape of y_val: ', y_val.shape)
 y_test = np.load('y_test.npy')
 print('shape of y_test: ', y_test.shape)
 # print(sum(y_val))
-
+y_test = y_test[:, 0:1]
+y_val= y_val[:, 0:1]
 samples_num = x_train.shape[0]
 nodes_num = x_train.shape[-1]
-output_num = y_train.shape[-1]
+output_num = y_test.shape[-1]
 # Set up model
 crnn = torch.load(model_name).cuda(device=device)
 # print(crnn.networks[0].rnn.weight_ih_l0)
 start = time.time()
 
 x_val = torch.from_numpy(x_val).float().cuda(device=device)
-pred, _ =crnn(x_val)
+pred, _, _  =crnn(x_val)
 del x_val
 print('val')
 accuracy_val = [accuracy_score(y_val[:, i] ,pred.cpu()[:, i]) for i in range(output_num)]
@@ -62,7 +63,7 @@ print(y_val)
 print(y_val.sum())
 print('acurray : ', accuracy_val)
 x_test = torch.from_numpy(x_test).float().cuda(device=device)
-pred, _ =crnn(x_test)
+pred, _, _ =crnn(x_test)
 del x_test
 print('test')
 end = time.time() - start
