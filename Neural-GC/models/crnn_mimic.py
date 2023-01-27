@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 from copy import deepcopy
-
+from sklearn.utils import class_weight
 
 class RNN(nn.Module):
-    def __init__(self, num_series, hidden, nonlinearity):
+    def __init__(self, num_series, hidden, T , nonlinearity):
         '''
         RNN model with output layer to generate predictions.
 
@@ -21,7 +21,7 @@ class RNN(nn.Module):
         self.rnn = nn.RNN(num_series, hidden, nonlinearity=nonlinearity,
                           batch_first=True)
         self.rnn.flatten_parameters()
-        self.linear = nn.Conv1d(hidden, 2, 1)
+        self.out = nn.Linear(hidden, 2)
 
     def init_hidden(self, batch):
         '''Initialize hidden states for RNN cell.'''
@@ -32,18 +32,15 @@ class RNN(nn.Module):
         # Set up hidden state.
         if hidden is None:
             hidden = self.init_hidden(X.shape[0])
-
         # Apply RNN.
         X, hidden = self.rnn(X, hidden)
-
         # Calculate predictions using output layer.
-        X = X.transpose(2, 1)
-        X = self.linear(X)
-        return X.transpose(2, 1), hidden
+        X = self.out(X[:,-1,:])
+        return X, hidden, torch.softmax(X, dim=1)
 
 
 class cRNN_mimic(nn.Module):
-    def __init__(self, num_series, output, hidden, nonlinearity='relu'):
+    def __init__(self, num_series, output, T , hidden, class_weights, nonlinearity='relu'):
         '''
         cRNN model with one RNN per time series.
 
@@ -55,10 +52,12 @@ class cRNN_mimic(nn.Module):
         super(cRNN_mimic, self).__init__()
         self.p = output
         self.hidden = hidden
+        self.T = T
+        self.class_weights = class_weights
 
         # Set up networks.
         self.networks = nn.ModuleList([
-            RNN(num_series, hidden, nonlinearity) for _ in range(output)])
+            RNN(num_series, hidden, T, nonlinearity) for _ in range(output)])
 
     def forward(self, X, hidden=None):
         '''
@@ -72,10 +71,10 @@ class cRNN_mimic(nn.Module):
             hidden = [None for _ in range(self.p)]
         pred = [self.networks[i](X, hidden[i])
                 for i in range(self.p)]
-        pred, hidden = zip(*pred)
-        pred = [ torch.argmax(i, dim = 2, keepdim=True) for i in pred]
-        pred = torch.cat(pred, dim=2)
-        return pred, hidden
+        pred, hidden, pred_softmax = zip(*pred)
+        pred = [ torch.argmax(i, dim = 1, keepdim=True) for i in pred]
+        pred = torch.cat(pred, dim=1)
+        return pred, hidden, pred_softmax
 
     def GC(self, threshold=True):
         '''
@@ -97,43 +96,43 @@ class cRNN_mimic(nn.Module):
             return GC
 
 
-class cRNNSparse(nn.Module):
-    def __init__(self, num_series, sparsity, hidden, nonlinearity='relu'):
-        '''
-        cRNN model that only uses specified interactions.
+# class cRNNSparse(nn.Module):
+#     def __init__(self, num_series, sparsity, hidden, nonlinearity='relu'):
+#         '''
+#         cRNN model that only uses specified interactions.
 
-        Args:
-          num_series: dimensionality of multivariate time series.
-          sparsity: torch byte tensor indicating Granger causality, with size
-            (num_series, num_series).
-          hidden: number of units in RNN cell.
-          nonlinearity: nonlinearity of RNN cell.
-        '''
-        super(cRNNSparse, self).__init__()
-        self.p = num_series
-        self.hidden = hidden
-        self.sparsity = sparsity
+#         Args:
+#           num_series: dimensionality of multivariate time series.
+#           sparsity: torch byte tensor indicating Granger causality, with size
+#             (num_series, num_series).
+#           hidden: number of units in RNN cell.
+#           nonlinearity: nonlinearity of RNN cell.
+#         '''
+#         super(cRNNSparse, self).__init__()
+#         self.p = num_series
+#         self.hidden = hidden
+#         self.sparsity = sparsity
 
-        # Set up networks.
-        self.networks = nn.ModuleList([
-            RNN(int(torch.sum(sparsity[i].int())), hidden, nonlinearity)
-            for i in range(num_series)])
+#         # Set up networks.
+#         self.networks = nn.ModuleList([
+#             RNN(int(torch.sum(sparsity[i].int())), hidden, nonlinearity)
+#             for i in range(num_series)])
 
-    def forward(self, X, i=None, hidden=None, truncation=None):
-        '''Perform forward pass.
+#     def forward(self, X, i=None, hidden=None, truncation=None):
+#         '''Perform forward pass.
 
-        Args:
-          X: torch tensor of shape (batch, T, p).
-          i: index of the time series to forecast.
-          hidden: hidden states for RNN cell.
-        '''
-        if hidden is None:
-            hidden = [None for _ in range(self.p)]
-        pred = [self.networks[i](X[:, :, self.sparsity[i]], hidden[i])
-                for i in range(self.p)]
-        pred, hidden = zip(*pred)
-        pred = torch.cat(pred, dim=2)
-        return pred, hidden
+#         Args:
+#           X: torch tensor of shape (batch, T, p).
+#           i: index of the time series to forecast.
+#           hidden: hidden states for RNN cell.
+#         '''
+#         if hidden is None:
+#             hidden = [None for _ in range(self.p)]
+#         pred = [self.networks[i](X[:, :, self.sparsity[i]], hidden[i])
+#                 for i in range(self.p)]
+#         pred, hidden = zip(*pred)
+#         pred = torch.cat(pred, dim=2)
+#         return pred, hidden
 
 
 def prox_update(network, lam, lr):
@@ -154,7 +153,7 @@ def regularize(network, lam):
 def ridge_regularize(network, lam):
     '''Apply ridge penalty at linear layer and hidden-hidden weights.'''
     return lam * (
-        torch.sum(network.linear.weight ** 2) +
+        torch.sum(network.out.weight ** 2) +
         torch.sum(network.rnn.weight_hh_l0 ** 2))
 
 
@@ -184,15 +183,10 @@ def arrange_input(data, context):
         target[:, i, :] = data[start+1:end+1]
     return input.detach(), target.detach()
 
-
-# def train_model_gista(crnn, X, context, lam, lam_ridge, lr, max_iter,
-#                       check_every=50, r=0.8, lr_min=1e-8, sigma=0.5,
-#                       monotone=False, m=10, lr_decay=0.5,
-#                       begin_line_search=True, switch_tol=1e-3, verbose=1):
 def train_model_gista(crnn, X,Y, context, lam, lam_ridge, lr, max_iter,
                       check_every=50, r=0.8, lr_min=1e-8, sigma=0.5,
                       monotone=False, m=10, lr_decay=0.5,
-                      begin_line_search=True, switch_tol=1e-3, verbose=1):
+                      begin_line_search=True, switch_tol=1e-3, verbose=3):
     '''
     Train cRNN model with GISTA.
 
@@ -216,14 +210,10 @@ def train_model_gista(crnn, X,Y, context, lam, lam_ridge, lr, max_iter,
       verbose: level of verbosity (0, 1, 2).
     '''
     p = crnn.p
+    class_weights = crnn.class_weights
     crnn_copy = deepcopy(crnn)
-    loss_fn = nn.CrossEntropyLoss('mean')
+    loss_fn = [nn.CrossEntropyLoss(weight= class_weights[i] , reduction = 'sum') for i in range(p)]
     lr_list = [lr for _ in range(p)]
-
-#     # Set up data.
-#     X, Y = zip(*[arrange_input(x, context) for x in X])
-#     X = torch.cat(X, dim=0)
-#     Y = torch.cat(Y, dim=0)
 
     # Calculate full loss.
     mse_list = []
@@ -231,8 +221,8 @@ def train_model_gista(crnn, X,Y, context, lam, lam_ridge, lr, max_iter,
     loss_list = []
     for i in range(p):
         net = crnn.networks[i]
-        pred, _ = net(X)
-        mse = loss_fn(pred, Y[:, :, i])
+        pred, _, _ = net(X)
+        mse = loss_fn[i](pred, Y[:, i]) / X.shape[0]
         ridge = ridge_regularize(net, lam_ridge)
         smooth = mse + ridge
         mse_list.append(mse)
@@ -293,8 +283,8 @@ def train_model_gista(crnn, X,Y, context, lam, lam_ridge, lr, max_iter,
                 prox_update(net_copy, lam, lr_it)
 
                 # Check line search criterion.
-                pred, _ = net_copy(X)
-                mse = loss_fn(pred, Y[:, :, i])
+                pred, _, _ = net_copy(X)
+                mse = loss_fn[i](pred, Y[ :, i]) / X.shape[0]
                 ridge = ridge_regularize(net_copy, lam_ridge)
                 smooth = mse + ridge
                 with torch.no_grad():
@@ -388,8 +378,9 @@ def train_model_gista(crnn, X,Y, context, lam, lam_ridge, lr, max_iter,
 def train_model_adam(crnn, X, Y, context, lr, max_iter, lam=0, lam_ridge=0,
                      lookback=5, check_every=50, verbose=1):
     '''Train model with Adam.'''
-    p = X.shape[-1]
-    loss_fn = nn.CrossEntropyLoss(reduction='mean')
+    p = crnn.p
+    class_weights = crnn.class_weights
+    loss_fn = [nn.CrossEntropyLoss(weight= class_weights[i] , reduction = 'sum') for i in range(p)]
     optimizer = torch.optim.Adam(crnn.parameters(), lr=lr)
     train_loss_list = []
 
@@ -406,7 +397,7 @@ def train_model_adam(crnn, X, Y, context, lr, max_iter, lam=0, lam_ridge=0,
     for it in range(max_iter):
         # Calculate loss.
         pred = [crnn.networks[i](X)[0] for i in range(p)]
-        loss = sum([loss_fn(pred[i], Y[:, :, i]) for i in range(p)])
+        loss = sum([(loss_fn[i](pred[i], Y[:, i])) for i in range(p)])
 
         # Add penalty term.
         if lam > 0:
@@ -415,145 +406,24 @@ def train_model_adam(crnn, X, Y, context, lr, max_iter, lam=0, lam_ridge=0,
         if lam_ridge > 0:
             loss = loss + sum([ridge_regularize(net, lam_ridge)
                                for net in crnn.networks])
-
-        # Take gradient step.
+        crnn.zero_grad()
         loss.backward()
         optimizer.step()
-        crnn.zero_grad()
 
         # Check progress.
+
         if (it + 1) % check_every == 0:
-            mean_loss = loss / p
+            with torch.no_grad():
+                mean_loss = loss / p
+                mean_Nonsmooth = sum([regularize(net, lam) for net in crnn.networks]) / p
+                mean_Ridge = sum([ridge_regularize(net, lam_ridge) for net in crnn.networks]) / p
+                mean_en_loss = sum([(loss_fn[i](pred[i], Y[:, i])) for i in range(p)]) / p
             train_loss_list.append(mean_loss.detach())
 
             if verbose > 0:
                 print(('-' * 10 + 'Iter = %d' + '-' * 10) % (it + 1))
                 print('Loss = %f' % mean_loss)
-
-            # Check for early stopping.
-            if mean_loss < best_loss:
-                best_loss = mean_loss
-                best_it = it
-                best_model = deepcopy(crnn)
-            elif (it - best_it) == lookback * check_every:
-                if verbose:
-                    print('Stopping early')
-                break
-
-    # Restore best model.
-    restore_parameters(crnn, best_model)
-
-    return train_loss_list
-
-
-def train_model_ista(crnn, X, context, lr, max_iter, lam=0, lam_ridge=0,
-                     lookback=5, check_every=50, verbose=1):
-    '''Train model with Adam.'''
-    p = X.shape[-1]
-    loss_fn = nn.MSELoss(reduction='mean')
-    train_loss_list = []
-
-    # Set up data.
-    X, Y = zip(*[arrange_input(x, context) for x in X])
-    X = torch.cat(X, dim=0)
-    Y = torch.cat(Y, dim=0)
-
-    # For early stopping.
-    best_it = None
-    best_loss = np.inf
-    best_model = None
-
-    # Calculate smooth error.
-    pred = [crnn.networks[i](X)[0] for i in range(p)]
-    loss = sum([loss_fn(pred[i][:, :, 0], Y[:, :, i]) for i in range(p)])
-    ridge = sum([ridge_regularize(net, lam_ridge) for net in crnn.networks])
-    smooth = loss + ridge
-
-    for it in range(max_iter):
-        # Take gradient step.
-        smooth.backward()
-        for param in crnn.parameters():
-            param.data -= lr * param.grad
-
-        # Take prox step.
-        if lam > 0:
-            for net in crnn.networks:
-                prox_update(net, lam, lr)
-
-        crnn.zero_grad()
-
-        # Calculate loss for next iteration.
-        pred = [crnn.networks[i](X)[0] for i in range(p)]
-        loss = sum([loss_fn(pred[i][:, :, 0], Y[:, :, i]) for i in range(p)])
-        ridge = sum([ridge_regularize(net, lam_ridge)
-                     for net in crnn.networks])
-        smooth = loss + ridge
-
-        # Check progress.
-        if (it + 1) % check_every == 0:
-            # Add nonsmooth penalty.
-            nonsmooth = sum([regularize(net, lam) for net in crnn.networks])
-            mean_loss = (smooth + nonsmooth) / p
-            train_loss_list.append(mean_loss.detach())
-
-            if verbose > 0:
-                print(('-' * 10 + 'Iter = %d' + '-' * 10) % (it + 1))
-                print('Loss = %f' % mean_loss)
-                print('Variable usage = %.2f%%'
-                      % (100 * torch.mean(crnn.GC().float())))
-
-            # Check for early stopping.
-            if mean_loss < best_loss:
-                best_loss = mean_loss
-                best_it = it
-                best_model = deepcopy(crnn)
-            elif (it - best_it) == lookback * check_every:
-                if verbose:
-                    print('Stopping early')
-                break
-
-    # Restore best model.
-    restore_parameters(crnn, best_model)
-
-    return train_loss_list
-
-
-def train_unregularized(crnn, X, context, lr, max_iter, lookback=5,
-                        check_every=50, verbose=1):
-    '''Train model with Adam.'''
-    p = X.shape[-1]
-    loss_fn = nn.MSELoss(reduction='mean')
-    optimizer = torch.optim.Adam(crnn.parameters(), lr=lr)
-    train_loss_list = []
-
-    # Set up data.
-    X, Y = zip(*[arrange_input(x, context) for x in X])
-    X = torch.cat(X, dim=0)
-    Y = torch.cat(Y, dim=0)
-
-    # For early stopping.
-    best_it = None
-    best_loss = np.inf
-    best_model = None
-
-    for it in range(max_iter):
-        # Calculate loss.
-        pred, hidden = crnn(X)
-        loss = sum([loss_fn(pred[:, :, i], Y[:, :, i]) for i in range(p)])
-
-        # Take gradient step.
-        loss.backward()
-        optimizer.step()
-        crnn.zero_grad()
-
-        # Check progress.
-        if (it + 1) % check_every == 0:
-            mean_loss = loss / p
-            train_loss_list.append(mean_loss.detach())
-
-            if verbose > 0:
-                print(('-' * 10 + 'Iter = %d' + '-' * 10) % (it + 1))
-                print('Loss = %f' % mean_loss)
+                print('MSE = %f, Ridge = %f, Nonsmooth = %f'% (mean_en_loss, mean_Ridge, mean_Nonsmooth))
 
             # Check for early stopping.
             if mean_loss < best_loss:

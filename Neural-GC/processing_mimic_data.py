@@ -5,9 +5,8 @@ import copy, math, os, pickle, time, pandas as pd, numpy as np
 log = 'mimic_rnn.log'
 model_name = 'crnnmimic.pt'
 H = 400
-patient_num = 1000
+patient_num = 10000
 data_path = '/home/comp/f2428631/mimic/data/all_hourly_data.h5'
-
 ID_COLS = ['subject_id', 'hadm_id', 'icustay_id']
 
 RANDOM = 0
@@ -63,6 +62,7 @@ split_train_ids, val_ids = train_test_split(train_ids, test_size=0.125, random_s
 # Imputation and Standardization of Time Series Features¶
 X_clean = simple_imputer(X,train_ids['subject_id'])
 print(X_clean.shape)
+print(X_clean)
 print(Y.shape)
 def minmax(x):# normalize
     mins = x.min()
@@ -126,6 +126,9 @@ abs_time = (X_merge['intime'] + X_merge['hours_in'])%24
 X_merge.insert(4, 'absolute_time', abs_time)
 X_merge.drop('intime', axis=1, inplace=True)
 X_merge = X_merge.set_index(['subject_id','icustay_id','hadm_id','hours_in'])
+print('X_merge')
+print(X_merge[0:1])
+X_merge[0:1].to_csv('X_merge.csv')
 del X_std, X_clean
 
 
@@ -148,6 +151,8 @@ X_merge = X_merge.dropna(axis=1)
 x = np.array(list(X_merge.reset_index().groupby('subject_id').apply(create_x_matrix)))
 print('X.shape')
 print(x.shape)
+print('X.shape')
+print(x)
 y = np.array(list(Y.reset_index().groupby('subject_id').apply(create_y_matrix)))
 print('Y.shape')
 print(y.shape)
@@ -177,6 +182,8 @@ lengths_test = lengths[test_indices]
 print("Training size: ", X_train.shape[0])
 print("Validation size: ", X_val.shape[0])
 print("Test size: ", X_test.shape[0])
+print(X_train[0])
+print(lengths_train)
 #Make Windows
 
 # def make_3d_tensor_slices(X_tensor, Y_tensor, lengths):
@@ -273,6 +280,7 @@ def make_3d_tensor_slices(X_tensor, Y_tensor, lengths):
                 # 隔了 PREDICTION_WINDOW
                 result_i = y_patient[timestep+SLICE_SIZE+GAP_TIME:timestep+SLICE_SIZE+GAP_TIME+PREDICTION_WINDOW,i]
                 Y_tensor_new[current_row,i] = result_i
+            X_tensor_new[current_row] = x_window
             current_row += 1
     X_tensor_new = X_tensor_new[:current_row,:,:]
     Y_tensor_new = Y_tensor_new[:current_row,:]
@@ -281,6 +289,7 @@ def make_3d_tensor_slices(X_tensor, Y_tensor, lengths):
 print(X_train.shape)
 print(Y_train.shape)
 x_train, y_train = make_3d_tensor_slices(X_train, Y_train, lengths_train)
+print(x_train[0])
 x_val, y_val = make_3d_tensor_slices(X_val, Y_val, lengths_val)
 x_test, y_test = make_3d_tensor_slices(X_test, Y_test, lengths_test)
 del X_train, Y_train, X_test, Y_test, X_val, Y_val
