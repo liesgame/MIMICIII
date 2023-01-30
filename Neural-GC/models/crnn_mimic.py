@@ -183,7 +183,7 @@ def arrange_input(data, context):
         target[:, i, :] = data[start+1:end+1]
     return input.detach(), target.detach()
 
-def train_model_gista(crnn, X,Y, context, lam, lam_ridge, lr, max_iter,
+def train_model_gista(crnn, X,Y, train_dataloader, valid_dataloader, lam, lam_ridge, lr, max_iter,
                       check_every=50, r=0.8, lr_min=1e-8, sigma=0.5,
                       monotone=False, m=10, lr_decay=0.5,
                       begin_line_search=True, switch_tol=1e-3, verbose=3):
@@ -375,19 +375,18 @@ def train_model_gista(crnn, X,Y, context, lam, lam_ridge, lr, max_iter,
     return train_loss_list, train_mse_list
 
 
-def train_model_adam(crnn, X, Y, context, lr, max_iter, lam=0, lam_ridge=0,
+def train_model_adam(crnn,  train_dataloader, valid_dataloader, lr, max_iter, device, lam=0, lam_ridge=0,
                      lookback=5, check_every=50, verbose=1):
     '''Train model with Adam.'''
     p = crnn.p
     class_weights = crnn.class_weights
     loss_fn = [nn.CrossEntropyLoss(weight= class_weights[i] , reduction = 'sum') for i in range(p)]
     optimizer = torch.optim.Adam(crnn.parameters(), lr=lr)
-    train_loss_list = []
+    train_loss = []
+    valid_loss = []
+    train_epochs_loss = []
+    valid_epochs_loss = []
 
-    # # Set up data.
-    # X, Y = zip(*[arrange_input(x, context) for x in X])
-    # X = torch.cat(X, dim=0)
-    # Y = torch.cat(Y, dim=0)
 
     # For early stopping.
     best_it = None
@@ -395,35 +394,56 @@ def train_model_adam(crnn, X, Y, context, lr, max_iter, lam=0, lam_ridge=0,
     best_model = None
 
     for it in range(max_iter):
-        # Calculate loss.
-        pred = [crnn.networks[i](X)[0] for i in range(p)]
-        loss = sum([(loss_fn[i](pred[i], Y[:, i])) for i in range(p)])
+        crnn.train()
+        train_epoch_loss = []
+        for batch_index, (inputs, labels) in enumerate(train_dataloader):
+            inputs = inputs.cuda(device = device)
+            labels = labels.cuda(device = device)
+            # Calculate loss.
+            pred = [crnn.networks[i](inputs)[0] for i in range(p)]
+            loss = sum([(loss_fn[i](pred[i], labels[:, i])) for i in range(p)]) / inputs.shape[0]
 
-        # Add penalty term.
-        if lam > 0:
-            loss = loss + sum([regularize(net, lam) for net in crnn.networks])
+            # Add penalty term.
+            if lam > 0:
+                loss = loss + sum([regularize(net, lam) for net in crnn.networks])
 
-        if lam_ridge > 0:
-            loss = loss + sum([ridge_regularize(net, lam_ridge)
-                               for net in crnn.networks])
-        crnn.zero_grad()
-        loss.backward()
-        optimizer.step()
+            if lam_ridge > 0:
+                loss = loss + sum([ridge_regularize(net, lam_ridge)
+                                for net in crnn.networks])
+            crnn.zero_grad()
+            loss.backward()
+            optimizer.step()
+            train_epoch_loss.append(loss.item())
+            train_loss.append(loss.item())
+            if verbose > 1:
+                if batch_index%(len(train_dataloader)//2)==0:
+                    print("epoch={}/{},{}/{} of train, loss={}".format(
+                        it, max_iter, batch_index, len(train_dataloader),loss.item()))
+        train_epochs_loss.append(np.average(train_epoch_loss))
 
         # Check progress.
 
         if (it + 1) % check_every == 0:
-            with torch.no_grad():
-                mean_loss = loss / p
-                mean_Nonsmooth = sum([regularize(net, lam) for net in crnn.networks]) / p
-                mean_Ridge = sum([ridge_regularize(net, lam_ridge) for net in crnn.networks]) / p
-                mean_en_loss = sum([(loss_fn[i](pred[i], Y[:, i])) for i in range(p)]) / p
-            train_loss_list.append(mean_loss.detach())
+            crnn.eval()
+            valid_epoch_loss = []
+            mean_Ridge_loss =  sum([ridge_regularize(net, lam_ridge) for net in crnn.networks]) / p
+            mean_Nonsmooth_loss = sum([regularize(net, lam) for net in crnn.networks]) / p
+
+            for batch_index, (inputs, labels) in enumerate(valid_dataloader):
+                inputs = inputs.cuda(device = device)
+                labels = labels.cuda(device = device)
+                pred = [crnn.networks[i](inputs)[0] for i in range(p)]
+                entory_loss = sum([(loss_fn[i](pred[i], labels[:, i])) for i in range(p)]) / inputs.shape[0] / p
+                total_loss =entory_loss + mean_Ridge_loss + mean_Nonsmooth_loss
+                valid_epoch_loss.append(total_loss.item())
+                valid_loss.append(total_loss.item())
+            mean_loss = np.average(valid_epoch_loss)
+            valid_epochs_loss.append(mean_loss)
 
             if verbose > 0:
-                print(('-' * 10 + 'Iter = %d' + '-' * 10) % (it + 1))
+                print(('-' * 10 + 'valid Iter = %d' + '-' * 10) % (it + 1))
                 print('Loss = %f' % mean_loss)
-                print('MSE = %f, Ridge = %f, Nonsmooth = %f'% (mean_en_loss, mean_Ridge, mean_Nonsmooth))
+                print('CrossEntropyLoss = %f, Ridge = %f, Nonsmooth = %f'% (mean_loss - mean_Ridge_loss - mean_Nonsmooth_loss, mean_Ridge_loss, mean_Nonsmooth_loss))
 
             # Check for early stopping.
             if mean_loss < best_loss:
@@ -438,4 +458,4 @@ def train_model_adam(crnn, X, Y, context, lr, max_iter, lam=0, lam_ridge=0,
     # Restore best model.
     restore_parameters(crnn, best_model)
 
-    return train_loss_list
+    return train_loss, valid_loss, train_epochs_loss, valid_epochs_loss

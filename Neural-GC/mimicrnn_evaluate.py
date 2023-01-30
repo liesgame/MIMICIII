@@ -1,8 +1,6 @@
 import torch
 import numpy as np
 import pandas as pd
-import time 
-
 from sklearn.metrics import roc_auc_score
 from sklearn.metrics import log_loss
 from sklearn.metrics import accuracy_score
@@ -34,26 +32,24 @@ output_num = y_test.shape[-1]
 # Set up model
 crnn = torch.load(model_name).cuda(device=device)
 # print(crnn.networks[0].rnn.weight_ih_l0)
-start = time.time()
 
-x_val = torch.from_numpy(x_val).float().cuda(device=device)
-pred, _, _  =crnn(x_val)
-del x_val
-print('val')
-accuracy_val = [accuracy_score(y_val[:, i] ,pred.cpu()[:, i]) for i in range(output_num)]
-print('pred')
-print(pred.cpu())
-print(pred.cpu().sum())
-pd.DataFrame(pred.cpu()).to_csv('x_pre_val.csv')
-print(y_val)
-pd.DataFrame(y_val).to_csv('y_val.csv')
-print(y_val.sum())
-print('acurray : ', accuracy_val)
+# x_val = torch.from_numpy(x_val).float().cuda(device=device)
+# pred, _, _  =crnn(x_val)
+# del x_val
+# print('val')
+# accuracy_val = [accuracy_score(y_val[:, i] ,pred.cpu()[:, i]) for i in range(output_num)]
+# print('pred')
+# print(pred.cpu())
+# print(pred.cpu().sum())
+# pd.DataFrame(pred.cpu()).to_csv('x_pre_val.csv')
+# print(y_val)
+# pd.DataFrame(y_val).to_csv('y_val.csv')
+# print(y_val.sum())
+# print('acurray : ', accuracy_val)
 x_test = torch.from_numpy(x_test).float().cuda(device=device)
 pred, _, _ =crnn(x_test)
 del x_test
 print('test')
-end = time.time() - start
 accuracy_test = [accuracy_score(y_test[:, i] ,pred.cpu()[:, i]) for i in range(output_num)]
 print('pred')
 print(pred.cpu())
@@ -67,14 +63,14 @@ print('acurray : ', [accuracy_score(y_test[:, i] ,pred.cpu()[:, i]) for i in ran
 precision_score=[precision_score(y_test[:, i],pred.cpu()[:, i]) for i in range(output_num)]
 f1_score = [f1_score(y_test[:, i],pred.cpu()[:, i]) for i in range(output_num)]
 recall_score = [recall_score(y_test[:, i],pred.cpu()[:, i]) for i in range(output_num)]
-# roc_auc_score = [roc_auc_score(y_test[:,i],pred.cpu()[:, i]) for i in range(output_num)]
+roc_auc_score = [roc_auc_score(y_test[:,i],pred.cpu()[:, i]) for i in range(output_num)]
 with open('mimic_rnn.log', "a") as logfile:
-        logfile.write('MIMIC_CRNN gista' + ' ACURRAY   time '+ str(end)+  '\n')
-        logfile.write('samples = '+str(samples_num) + ",  nodes="+str(nodes_num)+ ' output = '+str(output_num) + '\n')
-        logfile.write('accuracy_val = '+ str(accuracy_val)+ '\n')
-        logfile.write('acurracy_test = '+ str(accuracy_test)+ '\n')
-        logfile.write('precision_score = '+ str(precision_score)+ '\n')
-        logfile.write('recall_score = '+ str(recall_score)+ '\n')
-        logfile.write('f1_score = '+ str(f1_score)+ '\n')
-        # logfile.write('roc_auc_score = '+ str(roc_auc_score)+ '\n')
+    logfile.write('MIMIC_CRNN admin  ' + ' ACURRAY   \n')
+    logfile.write('samples = '+str(samples_num) + ",  nodes="+str(nodes_num)+ ' output = '+str(output_num) + '\n')
+    # logfile.write('accuracy_val = '+ str(accuracy_val)+ '\n')
+    logfile.write('acurracy_test = '+ str(accuracy_test)+ '\n')
+    logfile.write('precision_score = '+ str(precision_score)+ '\n')
+    logfile.write('recall_score = '+ str(recall_score)+ '\n')
+    logfile.write('f1_score = '+ str(f1_score)+ '\n')
+    logfile.write('roc_auc_score = '+ str(roc_auc_score)+ '\n')
         

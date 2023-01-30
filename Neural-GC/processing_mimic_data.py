@@ -1,10 +1,8 @@
 from sklearn.model_selection import train_test_split
 
-import copy, math, os, pickle, time, pandas as pd, numpy as np
+import pandas as pd, numpy as np
 # For GPU acceleration
 log = 'mimic_rnn.log'
-model_name = 'crnnmimic.pt'
-H = 400
 patient_num = 10000
 data_path = '/home/comp/f2428631/mimic/data/all_hourly_data.h5'
 ID_COLS = ['subject_id', 'hadm_id', 'icustay_id']
@@ -71,7 +69,6 @@ def minmax(x):# normalize
     return x_std
 
 def std_time_since_measurement(x):
-    idx = pd.IndexSlice
     x = np.where(x==100, 0, x)
     means = x.mean()
     stds = x.std()
@@ -289,7 +286,6 @@ def make_3d_tensor_slices(X_tensor, Y_tensor, lengths):
 print(X_train.shape)
 print(Y_train.shape)
 x_train, y_train = make_3d_tensor_slices(X_train, Y_train, lengths_train)
-print(x_train[0])
 x_val, y_val = make_3d_tensor_slices(X_val, Y_val, lengths_val)
 x_test, y_test = make_3d_tensor_slices(X_test, Y_test, lengths_test)
 del X_train, Y_train, X_test, Y_test, X_val, Y_val
