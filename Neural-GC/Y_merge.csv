@@ -1,0 +1,2 @@
+subject_id,hadm_id,icustay_id,hours_in,vent,vaso,dobutamine,dopamine,epinephrine,milrinone,norepinephrine,phenylephrine,vasopressin,colloid_bolus,crystalloid_bolus,nivdurations
+3,145834,211552,0,1,0,0,0,0,0,0,0,0,0,0,0

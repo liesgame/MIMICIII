@@ -184,7 +184,7 @@ def arrange_input(data, context):
     return input.detach(), target.detach()
 
 def train_model_gista(crnn, X,Y, train_dataloader, valid_dataloader, lam, lam_ridge, lr, max_iter,
-                      check_every=50, r=0.8, lr_min=1e-8, sigma=0.5,
+                      device,check_every=50, r=0.8, lr_min=1e-8, sigma=0.5,
                       monotone=False, m=10, lr_decay=0.5,
                       begin_line_search=True, switch_tol=1e-3, verbose=3):
     '''
@@ -219,19 +219,22 @@ def train_model_gista(crnn, X,Y, train_dataloader, valid_dataloader, lam, lam_ri
     mse_list = []
     smooth_list = []
     loss_list = []
-    for i in range(p):
-        net = crnn.networks[i]
-        pred, _, _ = net(X)
-        mse = loss_fn[i](pred, Y[:, i]) / X.shape[0]
-        ridge = ridge_regularize(net, lam_ridge)
-        smooth = mse + ridge
-        mse_list.append(mse)
-        smooth_list.append(smooth)
-        with torch.no_grad():
-            nonsmooth = regularize(net, lam)
-            loss = smooth + nonsmooth
-            loss_list.append(loss)
-
+    for batch_index, (inputs, labels) in enumerate(train_dataloader):
+        inputs = inputs.cuda(device = device)
+        labels = labels.cuda(device = device) 
+        for i in range(p):
+            net = crnn.networks[i]
+            pred, _, _ = net(inputs)
+            mse = loss_fn[i](pred, labels[:, i]) / inputs.shape[0]
+            ridge = ridge_regularize(net, lam_ridge)
+            smooth = mse + ridge
+            mse_list.append(mse)
+            smooth_list.append(smooth)
+            with torch.no_grad():
+                nonsmooth = regularize(net, lam)
+                loss = smooth + nonsmooth
+                loss_list.append(loss)
+        break
     # Set up lists for loss and mse.
     with torch.no_grad():
         loss_mean = sum(loss_list) / p
@@ -250,95 +253,97 @@ def train_model_gista(crnn, X,Y, train_dataloader, valid_dataloader, lam, lam_ri
         last_losses = [[loss_list[i]] for i in range(p)]
 
     for it in range(max_iter):
-        # Backpropagate errors.
-        sum([smooth_list[i] for i in range(p) if not done[i]]).backward()
 
-        # For next iteration.
-        new_mse_list = []
-        new_smooth_list = []
-        new_loss_list = []
+        for batch_index, (inputs, labels) in enumerate(train_dataloader):
+            inputs = inputs.cuda(device = device)
+            labels = labels.cuda(device = device)
+            # Backpropagate errors.
+            sum([smooth_list[i] for i in range(p) if not done[i]]).backward()
+
+            # For next iteration.
+            new_mse_list = []
+            new_smooth_list = []
+            new_loss_list = []
 
         # Perform GISTA step for each network.
-        for i in range(p):
-            # Skip if network converged.
-            if done[i]:
-                new_mse_list.append(mse_list[i])
-                new_smooth_list.append(smooth_list[i])
-                new_loss_list.append(loss_list[i])
-                continue
+            for i in range(p):
+                # Skip if network converged.
+                if done[i]:
+                    new_mse_list.append(mse_list[i])
+                    new_smooth_list.append(smooth_list[i])
+                    new_loss_list.append(loss_list[i])
+                    continue
 
-            # Prepare for line search.
-            step = False
-            lr_it = lr_list[i]
-            net = crnn.networks[i]
-            net_copy = crnn_copy.networks[i]
+                # Prepare for line search.
+                step = False
+                lr_it = lr_list[i]
+                net = crnn.networks[i]
+                net_copy = crnn_copy.networks[i]
 
-            while not step:
-                # Perform tentative ISTA step.
-                for param, temp_param in zip(net.parameters(),
-                                             net_copy.parameters()):
-                    temp_param.data = param - lr_it * param.grad
+                while not step:
+                    # Perform tentative ISTA step.
+                    for param, temp_param in zip(net.parameters(),
+                                                net_copy.parameters()):
+                        temp_param.data = param - lr_it * param.grad
 
-                # Proximal update.
-                prox_update(net_copy, lam, lr_it)
+                    # Proximal update.
+                    prox_update(net_copy, lam, lr_it)
 
-                # Check line search criterion.
-                pred, _, _ = net_copy(X)
-                mse = loss_fn[i](pred, Y[ :, i]) / X.shape[0]
-                ridge = ridge_regularize(net_copy, lam_ridge)
-                smooth = mse + ridge
-                with torch.no_grad():
-                    nonsmooth = regularize(net_copy, lam)
-                    loss = smooth + nonsmooth
-                    tol = (0.5 * sigma / lr_it) * sum(
-                        [torch.sum((param - temp_param) ** 2)
-                         for param, temp_param in
-                         zip(net.parameters(), net_copy.parameters())])
+                    # Check line search criterion.
+                    pred, _, _ = net_copy(inputs)
+                    mse = loss_fn[i](pred, labels[ :, i]) / inputs.shape[0]
+                    ridge = ridge_regularize(net_copy, lam_ridge)
+                    smooth = mse + ridge
+                    with torch.no_grad():
+                        nonsmooth = regularize(net_copy, lam)
+                        loss = smooth + nonsmooth
+                        tol = (0.5 * sigma / lr_it) * sum(
+                            [torch.sum((param - temp_param) ** 2)
+                            for param, temp_param in
+                            zip(net.parameters(), net_copy.parameters())])
 
-                comp = loss_list[i] if monotone else max(last_losses[i])
-                if not line_search or (comp - loss) > tol:
-                    step = True
-                    if verbose > 1:
-                        print('Taking step, network i = %d, lr = %f'
-                              % (i, lr_it))
-                        print('Gap = %f, tol = %f' % (comp - loss, tol))
+                    comp = loss_list[i] if monotone else max(last_losses[i])
+                    if not line_search or (comp - loss) > tol:
+                        step = True
+                        if verbose > 1:
+                            print('Taking step, network i = %d, lr = %f'
+                                % (i, lr_it))
+                            print('Gap = %f, tol = %f' % (comp - loss, tol))
 
-                    # For next iteration.
-                    new_mse_list.append(mse)
-                    new_smooth_list.append(smooth)
-                    new_loss_list.append(loss)
+                        # For next iteration.
+                        new_mse_list.append(mse)
+                        new_smooth_list.append(smooth)
+                        new_loss_list.append(loss)
 
-                    # Adjust initial learning rate.
-                    lr_list[i] = (
-                        (lr_list[i] ** (1 - lr_decay)) * (lr_it ** lr_decay))
+                        # Adjust initial learning rate.
+                        lr_list[i] = (
+                            (lr_list[i] ** (1 - lr_decay)) * (lr_it ** lr_decay))
 
-                    if not monotone:
-                        if len(last_losses[i]) == m:
-                            last_losses[i].pop(0)
-                        last_losses[i].append(loss)
-                else:
-                    # Reduce learning rate.
-                    lr_it *= r
-                    if lr_it < lr_min:
-                        done[i] = True
-                        new_mse_list.append(mse_list[i])
-                        new_smooth_list.append(smooth_list[i])
-                        new_loss_list.append(loss_list[i])
-                        if verbose > 0:
-                            print('Network %d converged' % (i + 1))
-                        break
+                        if not monotone:
+                            if len(last_losses[i]) == m:
+                                last_losses[i].pop(0)
+                            last_losses[i].append(loss)
+                    else:
+                        # Reduce learning rate.
+                        lr_it *= r
+                        if lr_it < lr_min:
+                            done[i] = True
+                            new_mse_list.append(mse_list[i])
+                            new_smooth_list.append(smooth_list[i])
+                            new_loss_list.append(loss_list[i])
+                            if verbose > 0:
+                                print('Network %d converged' % (i + 1))
+                            break
+                # Clean up.
+                net.zero_grad()
+                if step:
+                    # Swap network parameters.
+                    crnn.networks[i], crnn_copy.networks[i] = net_copy, net
 
-            # Clean up.
-            net.zero_grad()
-
-            if step:
-                # Swap network parameters.
-                crnn.networks[i], crnn_copy.networks[i] = net_copy, net
-
-        # For next iteration.
-        mse_list = new_mse_list
-        smooth_list = new_smooth_list
-        loss_list = new_loss_list
+            # For next iteration.
+            mse_list = new_mse_list
+            smooth_list = new_smooth_list
+            loss_list = new_loss_list
 
         # Check if all networks have converged.
         if sum(done) == p:
@@ -406,7 +411,6 @@ def train_model_adam(crnn,  train_dataloader, valid_dataloader, lr, max_iter, de
             # Add penalty term.
             if lam > 0:
                 loss = loss + sum([regularize(net, lam) for net in crnn.networks])
-
             if lam_ridge > 0:
                 loss = loss + sum([ridge_regularize(net, lam_ridge)
                                 for net in crnn.networks])
@@ -422,28 +426,29 @@ def train_model_adam(crnn,  train_dataloader, valid_dataloader, lr, max_iter, de
         train_epochs_loss.append(np.average(train_epoch_loss))
 
         # Check progress.
-
+        print(('-' * 10 + 'train Iter = %d' + '-' * 10) % (it + 1))
+        print('Loss = %f' % (np.average(train_epoch_loss)))
         if (it + 1) % check_every == 0:
             crnn.eval()
             valid_epoch_loss = []
-            mean_Ridge_loss =  sum([ridge_regularize(net, lam_ridge) for net in crnn.networks]) / p
-            mean_Nonsmooth_loss = sum([regularize(net, lam) for net in crnn.networks]) / p
+            mean_Ridge_loss =  sum([ridge_regularize(net, lam_ridge) for net in crnn.networks])
+            mean_Nonsmooth_loss = sum([regularize(net, lam) for net in crnn.networks])
 
             for batch_index, (inputs, labels) in enumerate(valid_dataloader):
                 inputs = inputs.cuda(device = device)
                 labels = labels.cuda(device = device)
                 pred = [crnn.networks[i](inputs)[0] for i in range(p)]
-                entory_loss = sum([(loss_fn[i](pred[i], labels[:, i])) for i in range(p)]) / inputs.shape[0] / p
+                entory_loss = sum([(loss_fn[i](pred[i], labels[:, i])) for i in range(p)]) / inputs.shape[0]
                 total_loss =entory_loss + mean_Ridge_loss + mean_Nonsmooth_loss
                 valid_epoch_loss.append(total_loss.item())
                 valid_loss.append(total_loss.item())
-            mean_loss = np.average(valid_epoch_loss)
+            mean_loss = np.average(valid_epoch_loss) 
             valid_epochs_loss.append(mean_loss)
 
             if verbose > 0:
                 print(('-' * 10 + 'valid Iter = %d' + '-' * 10) % (it + 1))
                 print('Loss = %f' % mean_loss)
-                print('CrossEntropyLoss = %f, Ridge = %f, Nonsmooth = %f'% (mean_loss - mean_Ridge_loss - mean_Nonsmooth_loss, mean_Ridge_loss, mean_Nonsmooth_loss))
+                print('CrossEntropyLoss = %f, Ridge = %f, Nonsmooth = %f'% (mean_loss - mean_Ridge_loss - mean_Nonsmooth_loss/p, mean_Ridge_loss, mean_Nonsmooth_loss))
 
             # Check for early stopping.
             if mean_loss < best_loss:

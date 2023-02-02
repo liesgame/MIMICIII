@@ -21,10 +21,10 @@ class MimicDataset(Dataset):
     return self.data_tensor[index], self.target_tensor[index]
 
 # For GPU acceleration
-device = torch.device('cuda')
+device = torch.device('cuda', 1)
 log = 'mimic_rnn.log'
 MODEL_NAME = 'crnnmimic.pt'
-BARCH_SIZE = 80000
+BARCH_SIZE = 40000
 H = 300
 TRAIN = 'adam'
 
@@ -71,18 +71,20 @@ start = time.time()
 x_train = torch.from_numpy(x_train).float()
 y_train = torch.from_numpy(y_train).long()
 train_dataset = MimicDataset(x_train, y_train)
-train_dataloader = DataLoader(dataset = train_dataset, batch_size = BARCH_SIZE, shuffle = True, num_workers = 0)
+train_dataloader = DataLoader(dataset = train_dataset, batch_size = BARCH_SIZE, shuffle = False, num_workers = 0)
 x_val = torch.from_numpy(x_val).float()
 y_val = torch.from_numpy(y_val).long()
 valid_dataset = MimicDataset(x_val, y_val)
-valid_dataloader = DataLoader(dataset = valid_dataset, batch_size = BARCH_SIZE, shuffle = True, num_workers = 0)
+valid_dataloader = DataLoader(dataset = valid_dataset, batch_size = BARCH_SIZE, shuffle = False, num_workers = 0)
 if TRAIN == 'adam':
-  train_loss_list = train_model_adam(crnn , train_dataloader = train_dataloader, valid_dataloader = valid_dataloader, lam=1e-2, lam_ridge=1e-2, lr=1e-3, max_iter=20000,device = device, check_every=50, verbose=1)
+  train_loss_list = train_model_adam(crnn , train_dataloader = train_dataloader, valid_dataloader = valid_dataloader, lam=1e-2, lam_ridge=1e-2, lr=1e-3, max_iter=20000,device = device, check_every=1, lookback=50, verbose=1)
 else:
   train_loss_list = train_model_gista(crnn, X=x_train, Y=y_train , train_dataloader = train_dataloader, valid_dataloader = valid_dataloader, lam=1e-2, lam_ridge=1e-2, lr=1e-3, max_iter=20000,device = device, check_every=50, verbose=1)
 torch.save(crnn,MODEL_NAME)
 end = time.time() - start
 with open('mimic_rnn.log', "a") as logfile:
+  if TRAIN == 'adam':
     logfile.write('MIMIC_CRNN adam  H '+ str(H) + '   time '+ str(end)+  '\n')
-
+  else:
+    logfile.write('MIMIC_CRNN gisa  H '+ str(H) + '   time '+ str(end)+  '\n')
         

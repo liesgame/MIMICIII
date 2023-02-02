@@ -46,11 +46,12 @@ def simple_imputer(df,train_subj):
 X = pd.read_hdf(data_path,'vitals_labs')
 Y = pd.read_hdf(data_path,'interventions')
 static = pd.read_hdf(data_path,'patients')
+# patient_num = static.shape[0]
 idx = pd.IndexSlice
 Y = Y.loc[idx[Y.index.levels[0][:patient_num]]]
-
 # 删除全部为0的列
 Y = Y.loc[:, (Y != 0).any(axis = 0)]
+Y[0:1].to_csv('Y_merge.csv')
 X = X.loc[idx[X.index.levels[0][:patient_num]]]
 print(X.shape)
 print(Y.shape)
@@ -123,6 +124,7 @@ abs_time = (X_merge['intime'] + X_merge['hours_in'])%24
 X_merge.insert(4, 'absolute_time', abs_time)
 X_merge.drop('intime', axis=1, inplace=True)
 X_merge = X_merge.set_index(['subject_id','icustay_id','hadm_id','hours_in'])
+X_merge.loc[:,'absolute_time'] = minmax(X_merge.loc[:,'absolute_time'])
 print('X_merge')
 print(X_merge[0:1])
 X_merge[0:1].to_csv('X_merge.csv')
@@ -144,7 +146,7 @@ def create_y_matrix(y):
     y = y[:MAX_LEN, :]
     zeros[:y.shape[0], :] = y
     return zeros
-X_merge = X_merge.dropna(axis=1)
+# X_merge = X_merge.dropna(axis=1)
 x = np.array(list(X_merge.reset_index().groupby('subject_id').apply(create_x_matrix)))
 print('X.shape')
 print(x.shape)
@@ -259,7 +261,8 @@ def make_3d_tensor_slices(X_tensor, Y_tensor, lengths):
     num_features = X_tensor.shape[2]
     num_Y_features = Y_tensor.shape[2]
     # SLICE_SIZE 片大小 6
-    X_tensor_new = np.zeros((lengths.sum(), SLICE_SIZE, num_features + num_Y_features))
+    # X_tensor_new = np.zeros((lengths.sum(), SLICE_SIZE, num_features + num_Y_features))
+    X_tensor_new = np.zeros((lengths.sum(), SLICE_SIZE, num_features))
     Y_tensor_new = np.zeros((lengths.sum(), num_Y_features))
     number_of_1 = 0
     current_row = 0
@@ -271,7 +274,7 @@ def make_3d_tensor_slices(X_tensor, Y_tensor, lengths):
         for timestep in range(length - PREDICTION_WINDOW - GAP_TIME - SLICE_SIZE):
             x_window = x_patient[timestep:timestep+SLICE_SIZE]
             y_window = y_patient[timestep:timestep+SLICE_SIZE]
-            x_window = np.concatenate((x_window, y_window), axis=1)
+            # x_window = np.concatenate((x_window, y_window), axis=1)
             result = []
             for i in range(num_Y_features):
                 # 隔了 PREDICTION_WINDOW
